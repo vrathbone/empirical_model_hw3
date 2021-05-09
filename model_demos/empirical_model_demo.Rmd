@@ -1,0 +1,106 @@
+---
+title: "Empiricalmodel_wclimatedata_demo"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is an example code to get you started with applying empirical modeling techniques to data from climate models. (note: these same principles will also work for empirical modeling using data from observations as well!)
+
+I am using a similar R configuration to the one that we used for the "Climatemodel_demo" code last week. 
+
+```{r config}
+library(ggplot2)
+library(tidyverse)
+library(chron)
+library(lubridate)
+library(ncdf4)
+library(RColorBrewer)
+library(lattice)
+
+```
+
+For this example, I have generated two small files containing surface air temperatures over two different 15-year periods: 1990-2005 and 2085-2100. The time periods have been restricted here to make the file sizes smaller; when you do this for real, you'll probably want to consider longer intervals! 
+
+The data comes once again from the Community Earth System Model Large Ensemble set of simulations, which for the future projection portion of the runs used the 'high-emissions'/'business-as-usual' RCP8.5 emissions scenario. The name of the surface air temperature variable is 'TS'.
+
+Here I will read in the lat and lon coordinates from ONLY ONE of the data files; I can do this since they're slices of output from the same climate model, and therefore use the same spatial grid. 
+
+I have used a slightly different approach for dealing with the time coordinates in the two files; climate models sometimes use 'non-standard' calendars, and in CESM the time coordinate uses a 365-day calendar with no leap year. You'll notice that the 'seq.dates' function in the chron package is used, to generate a new time coordinate with the right dimensions and values using a 'normal' R calendar... as you move forward with your own analyses, you may want to do something like this as well. 
+
+```{r readdata}
+# path and filename for data
+ncpath <- "~/Box Sync/Courses_UCSB/ESM237_Spring2021/"
+ncname20th <- "b.e11.B20TRC5CNBDRD.f09_g16.102.cam.h0.TS.199001-200512"  
+ncfname20th <- paste(ncpath, ncname20th, ".nc", sep="")
+ncname21st <- "b.e11.BRCP85C5CNBDRD.f09_g16.102.cam.h0.TS.208501-210012"  
+ncfname21st <- paste(ncpath, ncname21st, ".nc", sep="")
+dname <- "TS"  # this is the name of the variable you want to look at
+
+ncin <- nc_open(ncfname20th)
+ncin21st <- nc_open(ncfname21st)
+
+lon <- ncvar_get(ncin,"lon")
+nlon <- dim(lon)
+lat <- ncvar_get(ncin,"lat")
+nlat <- dim(lat)
+
+# Time coordinate for 20th century part of run
+time20th <- ncvar_get(ncin,"time")
+tunits20th <- ncatt_get(ncin,"time","units")
+origin="1/15/1990"
+enddate="12/15/2005"
+rtime20th <- seq.dates(origin, enddate, by="months")
+
+# Time coordinate for 21st century part of run
+origin="1/15/2085"
+enddate="12/15/2100"
+rtime21st <- seq.dates(origin, enddate, by="months")
+
+```
+
+Here I've used a very simple empirical model, which we cover in Lecture 9: the capacity of "simple-cycle" natural gas plants as a function of temperature (Don't worry if you haven't watched the video yet). The generating capacity of these plants goes down by 1% for every degree above 15C.
+
+Before applying this empirical model to the climate output, we need to read in the temperature data from CESM and extract the portion of the data at the desired locations. Here I am using the location of the Alamitos Energy Center in Long Beach: 33°46′09″N 118°06′07″W. 
+
+**Note on coordinates: CESM uses a 0-360 degree longitude convention (or degrees E, to be specific). To convert Long Beach's 118W longitude to this convention, I have subtracted it from 360: 360-118 = 242E.**
+
+I will calculate:
+1) The regional average temperature for grid points closest to the power plant
+2) From 1), the monthly temperature in August
+
+```{r loadtemp_ncdf4}
+TS20th <- ncvar_get(ncin, "TS")-273.15
+TS21st <- ncvar_get(ncin21st, "TS")-273.15
+
+lats=which(lat >= 32 & lat <= 35)
+lons=which(lon >= 241 & lon <= 243)
+
+# Regional average
+tsavg20th <- apply(TS20th[lons,lats,],3,mean)
+tsavg21st <- apply(TS21st[lons,lats,],3,mean)
+
+# Make data frame, store the month of year in the data frame along with temperature information
+clim20th <- data.frame(time=rtime20th, tsavg=tsavg20th)
+clim20th$season = month(rtime20th)
+clim21st <- data.frame(time=rtime21st, tsavg=tsavg21st)
+clim21st$season = month(rtime21st)
+
+# Get August values only
+augclim20th = subset(clim20th, clim20th$season==8)
+augclim20th$dt = unique(year(rtime20th))
+augclim21st = subset(clim21st, clim21st$season==8)
+augclim21st$dt = unique(year(rtime21st))
+
+# Apply empirical model: assume no change in efficiency below 15C, -1%/degree C above
+fac20=ifelse(augclim20th$tsavg-15 < 0,0,(augclim20th$tsavg-15)*-0.01)+1
+fac21=ifelse(augclim21st$tsavg-15 < 0,0,(augclim21st$tsavg-15)*-0.01)+1
+
+# Effect of climate change = ratio of efficiency factors for 21st, 20th century periods
+ccfac=mean(fac21)/mean(fac20)
+print(ccfac)
+```
+
+The ratio is approximately 0.95 - so we can conclude that climate change has caused a 5% reduction in efficiency in the 21st century relative to the 20th.
