@@ -29,6 +29,7 @@ library(ncdf4)
 library(RColorBrewer)
 library(lattice)
 
+test
 # path and filename for data
 
 ncpath <- "./data/"
